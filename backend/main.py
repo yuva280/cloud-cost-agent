@@ -12,6 +12,7 @@ from backend.api.routes.actions import router as actions_router
 from backend.api.routes.safety import router as safety_router
 from backend.api.routes.services import router as services_router
 from backend.api.routes.simulator import router as simulator_router
+from backend.api.routes.workflow import router as workflow_router
 
 
 @asynccontextmanager
@@ -45,6 +46,7 @@ app.include_router(services_router, prefix="/api")
 app.include_router(safety_router, prefix="/api")
 app.include_router(actions_router, prefix="/api")
 app.include_router(simulator_router, prefix="/api")
+app.include_router(workflow_router, prefix="/api")
 
 
 @app.get("/health", tags=["Health"])
@@ -73,6 +75,7 @@ def root() -> dict:
             "services": "/api/services",
             "safety": "/api/safety",
             "actions": "/api/actions",
+            "workflow": "/api/workflow",
             "health": "/api/health",
         },
     }

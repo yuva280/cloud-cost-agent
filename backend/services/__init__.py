@@ -27,9 +27,11 @@ from backend.services.state_manager import (
     StateVersionConflictError,
     generate_next_version,
 )
+from backend.services.workflow_service import CostSavingsSummary, WorkflowService
 
 __all__ = [
     "ActionExecutionEngine",
+    "CostSavingsSummary",
     "DeterministicSafetyEngine",
     "EmergencyPolicy",
     "ExtendedServiceState",
@@ -44,6 +46,7 @@ __all__ = [
     "ServiceStateManager",
     "StateManagerError",
     "StateVersionConflictError",
+    "WorkflowService",
     "generate_next_version",
     "validate_capacity_bounds",
     "validate_latency_constraints",
