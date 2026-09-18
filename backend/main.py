@@ -11,6 +11,7 @@ from backend.api.deps import get_state_manager, reset_dependencies
 from backend.api.routes.actions import router as actions_router
 from backend.api.routes.safety import router as safety_router
 from backend.api.routes.services import router as services_router
+from backend.api.routes.agent import router as agent_router
 
 
 @asynccontextmanager
@@ -43,6 +44,8 @@ app.add_middleware(
 app.include_router(services_router, prefix="/api")
 app.include_router(safety_router, prefix="/api")
 app.include_router(actions_router, prefix="/api")
+app.include_router(agent_router, prefix="/api/agent", tags=["Agent"])
+
 
 
 @app.get("/health", tags=["Health"])

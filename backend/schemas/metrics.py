@@ -11,3 +11,8 @@ class ServiceObservation(BaseModel):
     cost_per_hour: float = Field(..., ge=0.0, description="Current estimated cost per hour.")
     observation_timestamp: datetime = Field(..., description="UTC timestamp when the observation was recorded.")
     state_version: str = Field(..., description="A unique version identifier for this state to detect stale data.")
+    current_instances: int = Field(default=2, description="Current number of running instances.")
+    min_instances: int = Field(default=1, description="Minimum number of running instances.")
+    healthy: bool = Field(default=True, description="Whether the service is currently healthy.")
+    is_critical: bool = Field(default=False, description="Whether the service is considered critical.")
+

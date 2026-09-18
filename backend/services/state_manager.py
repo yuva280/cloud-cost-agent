@@ -177,6 +177,10 @@ class ServiceStateManager:
             ),
             observation_timestamp=datetime.now(timezone.utc),
             state_version=state.state_version,
+            current_instances=state.current_instances,
+            min_instances=state.min_instances,
+            healthy=state.healthy,
+            is_critical=state.is_critical,
         )
 
     def update_state(

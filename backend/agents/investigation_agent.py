@@ -72,9 +72,14 @@ class InvestigationAgent:
 
         # Do not classify as underutilization if it is stale
         if not is_stale:
-            if is_low_cpu and is_low_mem and is_low_traffic and has_meaningful_cost:
+            is_healthy = observation.healthy is not False
+            is_non_critical = observation.is_critical is False
+            has_excess_capacity = (observation.current_instances or 0) > (observation.min_instances or 0)
+            
+            # Identify underutilization based on excess capacity and low utilization, without strictly requiring high cost
+            if is_low_cpu and is_low_mem and is_low_traffic and is_healthy and is_non_critical and has_excess_capacity:
                 issues.append("potential underutilization")
-                summary_parts.append("Service is potentially underutilized relative to its cost.")
+                summary_parts.append("Service is potentially underutilized relative to its capacity.")
             elif cost > 100.0 and not (is_substantial_traffic or is_high_cpu):
                 issues.append("excessive cost relative to utilization")
                 summary_parts.append("Cost is excessive given the current utilization.")

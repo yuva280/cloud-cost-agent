@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { scenarios } from './data/scenarios';
+import { scenarios, getInitialStates } from './data/scenarios';
 import { Scenario } from './types/schemas';
 import DashboardHeader from './components/DashboardHeader';
 import SystemStatus from './components/SystemStatus';
@@ -10,10 +10,40 @@ import Panels from './components/Panels';
 export default function App() {
   const [activeScenario, setActiveScenario] = useState<Scenario | null>(null);
 
-  const handleRunScenario = (scenarioId: string) => {
-    const scenario = scenarios.find(s => s.id === scenarioId);
-    if (scenario) {
-      setActiveScenario(scenario);
+  const handleRunScenario = (scenarioId: string, nlpData?: { report: any, original_request: string, identified_service: string, message: string }) => {
+    if (nlpData) {
+      // Dynamic scenario generated from the real backend NL request
+      const { report, original_request, identified_service, message } = nlpData;
+      
+      const allStates = getInitialStates();
+      // If we have the initial state in our static mock, use it for the table. Otherwise, we just map the initial_observation to a fake ServiceState.
+      const serviceState = allStates[identified_service] || {
+        ...report.initial_observation,
+        min_instances: 1,
+        max_instances: 10,
+        current_instances: 3,
+        healthy: true,
+        is_critical: false,
+        service_type: "unknown"
+      };
+
+      const dynamicScenario: Scenario = {
+        id: "dynamic-run",
+        name: `Agent Run: "${original_request}"`,
+        description: message,
+        initialState: {
+          [identified_service]: serviceState
+        },
+        workflow: report
+      };
+      
+      setActiveScenario(dynamicScenario);
+    } else {
+      // Fallback to static mock scenarios
+      const scenario = scenarios.find(s => s.id === scenarioId);
+      if (scenario) {
+        setActiveScenario(scenario);
+      }
     }
   };
 

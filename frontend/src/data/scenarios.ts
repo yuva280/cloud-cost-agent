@@ -1,6 +1,6 @@
 import { Scenario, WorkflowReport, ServiceState } from '../types/schemas';
 
-const getInitialStates = (): Record<string, ServiceState> => ({
+export const getInitialStates = (): Record<string, ServiceState> => ({
   "checkout-api": {
     current_instances: 5,
     min_instances: 2,
