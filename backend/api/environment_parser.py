@@ -1,4 +1,4 @@
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, Union
 from datetime import datetime, timezone
 
 from backend.services.state_manager import ServiceStateManager
@@ -8,105 +8,249 @@ from backend.schemas.metrics import ServiceObservation
 
 class EnvironmentParser:
     """
-    Parses an uploaded JSON environment dictionary and temporarily seeds the StateManager,
-    extracts explicit ServiceObservations (if any), and identifies simulated execution failures.
+    Parses an uploaded JSON environment, seeds the StateManager,
+    extracts explicit ServiceObservations, and identifies simulated
+    execution failures.
     """
 
     def __init__(self, state_manager: ServiceStateManager):
         self.state_manager = state_manager
 
-    def parse(self, env_data: Dict[str, Any]) -> Tuple[Optional[ServiceObservation], Optional[Dict[str, Any]]]:
-        """
-        Parses the JSON data.
-        Returns:
-            - explicit_observation: A ServiceObservation explicitly defined in the JSON
-              (e.g., with a stale timestamp).
-            - simulated_failure: A dictionary representing an execution failure
-              (action, target, error_code).
-        """
+    def parse(
+        self,
+        env_data: Union[Dict[str, Any], list]
+    ) -> Tuple[Optional[ServiceObservation], Optional[Dict[str, Any]]]:
+
         explicit_observation = None
         simulated_failure = None
 
-        # Parse services
+        # ---------------------------------------------------------
+        # 1. Normalize top-level JSON format
+        # ---------------------------------------------------------
+        # Supports:
+        #
+        # [
+        #   {"service_id": "payment-api", ...}
+        # ]
+        #
+        # and:
+        #
+        # {
+        #   "services": [...]
+        # }
+        #
+        # and:
+        #
+        # {
+        #   "services": {
+        #       "payment-api": {...}
+        #   }
+        # }
+        # ---------------------------------------------------------
+
+        if isinstance(env_data, list):
+            env_data = {"services": env_data}
+
+        if not isinstance(env_data, dict):
+            raise ValueError("Environment JSON must be an object or a list.")
+
+        # ---------------------------------------------------------
+        # 2. Parse services
+        # ---------------------------------------------------------
+
         services = []
+
         if "services" in env_data:
+
             if isinstance(env_data["services"], list):
                 services = env_data["services"]
+
             elif isinstance(env_data["services"], dict):
-                # If they passed {"services": {"orders-api": {...}}}
-                for k, v in env_data["services"].items():
-                    v["service_id"] = k
-                    services.append(v)
+                for service_id, service_data in env_data["services"].items():
+
+                    if not isinstance(service_data, dict):
+                        continue
+
+                    service_data = dict(service_data)
+                    service_data["service_id"] = service_id
+
+                    services.append(service_data)
+
         else:
-            # Maybe the top-level keys are services if they don't match known keywords
-            for k, v in env_data.items():
-                if isinstance(v, dict) and k not in ["observation", "execution_result", "action result"]:
-                    # Likely a service
-                    v["service_id"] = k
-                    services.append(v)
+            # Support top-level service objects
+            for key, value in env_data.items():
 
-        for s_data in services:
-            self._parse_and_register_service(s_data)
+                if (
+                    isinstance(value, dict)
+                    and key not in [
+                        "observation",
+                        "execution_result",
+                        "action result"
+                    ]
+                ):
+                    service_data = dict(value)
+                    service_data["service_id"] = key
+                    services.append(service_data)
 
-        # Parse explicit observation overrides
-        if "observation" in env_data and isinstance(env_data["observation"], dict):
-            obs_data = env_data["observation"]
-            explicit_observation = self._parse_observation(obs_data)
+        # Register all services
+        for service_data in services:
+
+            if isinstance(service_data, dict):
+                self._parse_and_register_service(service_data)
+
+        # ---------------------------------------------------------
+        # 3. Parse explicit observation
+        # ---------------------------------------------------------
+
+        if (
+            "observation" in env_data
+            and isinstance(env_data["observation"], dict)
+        ):
+            explicit_observation = self._parse_observation(
+                env_data["observation"]
+            )
+
         else:
-            # Check if any service data contains an inline 'timestamp' or
-            # 'latest_timestamp' field. If so, create an explicit observation
-            # with the observation timestamp so the staleness check in
-            # InvestigationAgent works correctly.
-            for s_data in services:
-                ts_val = s_data.get("timestamp") or s_data.get("observation_timestamp")
-                latest_ts = s_data.get("latest_timestamp")
-                if ts_val or latest_ts:
-                    sid = s_data.get("service_id") or s_data.get("service") or s_data.get("name")
-                    if sid:
-                        obs_data = {**s_data, "service_id": sid}
 
-                        # Use the primary observation timestamp if available
-                        if ts_val:
-                            obs_data["timestamp"] = ts_val
-                        elif latest_ts:
-                            # Only latest_timestamp exists; the absence of a primary
-                            # timestamp means the observation has no recorded time,
-                            # so mark it with epoch to force staleness detection.
-                            obs_data["timestamp"] = "2000-01-01T00:00:00Z"
+            # Look for timestamp information inside service data.
+            #
+            # This is important for Challenge 1 / stale observation.
+            for service_data in services:
 
-                        explicit_observation = self._parse_observation(obs_data)
-                        break  # Use the first service with timestamp info
+                if not isinstance(service_data, dict):
+                    continue
 
-        # Parse execution failures
-        fail_data = env_data.get("execution_result") or env_data.get("action result")
-        if fail_data and isinstance(fail_data, dict):
-            if fail_data.get("status", "").lower() == "failure" or fail_data.get("error_code"):
+                timestamp_value = (
+                    service_data.get("timestamp")
+                    or service_data.get("observation_timestamp")
+                )
+
+                latest_timestamp = service_data.get(
+                    "latest_timestamp"
+                )
+
+                if timestamp_value or latest_timestamp:
+
+                    service_id = (
+                        service_data.get("service_id")
+                        or service_data.get("service")
+                        or service_data.get("name")
+                    )
+
+                    if service_id:
+
+                        observation_data = {
+                            **service_data,
+                            "service_id": service_id
+                        }
+
+                        if timestamp_value:
+
+                            observation_data["timestamp"] = (
+                                timestamp_value
+                            )
+
+                        elif latest_timestamp:
+
+                            # If only latest_timestamp is available,
+                            # there is no reliable observation timestamp.
+                            # Force stale detection.
+                            observation_data["timestamp"] = (
+                                "2000-01-01T00:00:00Z"
+                            )
+
+                        explicit_observation = (
+                            self._parse_observation(
+                                observation_data
+                            )
+                        )
+
+                        break
+
+        # ---------------------------------------------------------
+        # 4. Parse simulated execution failures
+        # ---------------------------------------------------------
+
+        failure_data = (
+            env_data.get("execution_result")
+            or env_data.get("action result")
+        )
+
+        if (
+            failure_data
+            and isinstance(failure_data, dict)
+        ):
+
+            if (
+                failure_data.get("status", "").lower() == "failure"
+                or failure_data.get("error_code")
+            ):
+
                 simulated_failure = {
-                    "action": fail_data.get("action", "").upper(),
-                    "target": fail_data.get("target")
-                    or fail_data.get("target_service_id")
-                    or fail_data.get("service_id", ""),
-                    "error_code": fail_data.get("error_code", "unknown_error"),
-                    "error_message": fail_data.get(
+                    "action": failure_data.get(
+                        "action",
+                        ""
+                    ).upper(),
+
+                    "target": (
+                        failure_data.get("target")
+                        or failure_data.get(
+                            "target_service_id"
+                        )
+                        or failure_data.get(
+                            "service_id",
+                            ""
+                        )
+                    ),
+
+                    "error_code": failure_data.get(
+                        "error_code",
+                        "unknown_error"
+                    ),
+
+                    "error_message": failure_data.get(
                         "error_message",
-                        f"Simulated failure from JSON: {fail_data.get('error_code')}"
+                        (
+                            "Simulated failure from JSON: "
+                            f"{failure_data.get('error_code')}"
+                        )
                     )
                 }
 
         return explicit_observation, simulated_failure
 
-    def _parse_and_register_service(self, data: Dict[str, Any]):
-        sid = data.get("service_id") or data.get("service") or data.get("name")
-        if not sid:
+    # =============================================================
+    # SERVICE REGISTRATION
+    # =============================================================
+
+    def _parse_and_register_service(
+        self,
+        data: Dict[str, Any]
+    ):
+
+        service_id = (
+            data.get("service_id")
+            or data.get("service")
+            or data.get("name")
+        )
+
+        if not service_id:
             return
 
-        # Attempt to fetch existing to merge, or create new defaults
-        existing = self.state_manager.get_service(sid)
+        # ---------------------------------------------------------
+        # Existing service
+        # ---------------------------------------------------------
+
+        existing = self.state_manager.get_service(service_id)
+
         if existing:
+
             state_dict = existing.model_dump()
+
         else:
+
             state_dict = {
-                "service_id": sid,
+                "service_id": service_id,
                 "current_instances": 1,
                 "min_instances": 1,
                 "max_instances": 5,
@@ -122,120 +266,367 @@ class EnvironmentParser:
                 "is_critical": False
             }
 
-        # Flexible mapping for user pseudo-JSON formats
+        # ---------------------------------------------------------
+        # Flexible JSON field mapping
+        # ---------------------------------------------------------
+
         mapping = {
+
+            # CPU
             "CPU": "cpu_utilization_percent",
             "cpu": "cpu_utilization_percent",
+            "cpu_percent": "cpu_utilization_percent",
+
+            # Memory
             "memory": "memory_utilization_percent",
+            "memory_percent": "memory_utilization_percent",
+
+            # Traffic
             "requests per minute": "traffic_rpm",
             "RPM": "traffic_rpm",
+            "traffic_rpm": "traffic_rpm",
+
+            # Previous traffic
+            "previous RPM": "previous_traffic_rpm",
+            "previous_traffic_rpm": "previous_traffic_rpm",
+
+            # Latency
             "latency": "latency_ms",
+            "latency_ms": "latency_ms",
+
+            # Instances
             "instances": "current_instances",
-            "cost per hour": "cost_per_hour",
+            "current_instances": "current_instances",
+
             "min instances": "min_instances",
+            "min_instances": "min_instances",
+
             "max instances": "max_instances",
-            "max latency": "max_latency_ms"
+            "max_instances": "max_instances",
+
+            # Cost
+            "cost per hour": "cost_per_hour",
+            "cost_per_hour": "cost_per_hour",
+
+            # Latency limit
+            "max latency": "max_latency_ms",
+            "max_latency_ms": "max_latency_ms",
         }
 
-        for k, v in data.items():
-            if k in state_dict:
-                state_dict[k] = (
-                    self._clean_numeric(v)
-                    if isinstance(v, (int, float, str)) and k != "service_id"
-                    else v
-                )
-            elif k in mapping:
-                mapped_k = mapping[k]
-                state_dict[mapped_k] = self._clean_numeric(v)
+        # ---------------------------------------------------------
+        # Apply mappings
+        # ---------------------------------------------------------
+
+        for key, value in data.items():
+
+            # Direct schema field
+            if key in state_dict:
+
+                if (
+                    isinstance(value, (int, float, str))
+                    and key != "service_id"
+                ):
+                    state_dict[key] = self._clean_numeric(value)
+
+                else:
+                    state_dict[key] = value
+
+            # Flexible field name
+            elif key in mapping:
+
+                mapped_key = mapping[key]
+
+                # Boolean fields should remain boolean
+                if mapped_key in ["healthy", "is_critical"]:
+
+                    state_dict[mapped_key] = bool(value)
+
+                elif mapped_key == "state_version":
+
+                    state_dict[mapped_key] = str(value)
+
+                else:
+
+                    state_dict[mapped_key] = (
+                        self._clean_numeric(value)
+                    )
+
+        # ---------------------------------------------------------
+        # Ensure service_id is correct
+        # ---------------------------------------------------------
+
+        state_dict["service_id"] = service_id
+
+        # ---------------------------------------------------------
+        # Register service
+        # ---------------------------------------------------------
 
         self.state_manager.register_service(
             ServiceState(**state_dict),
             allow_overwrite=True
         )
 
-    def _parse_observation(self, data: Dict[str, Any]) -> ServiceObservation:
-        sid = data.get("service_id") or data.get("service")
+    # =============================================================
+    # OBSERVATION PARSER
+    # =============================================================
 
-        # Merge against the state manager for missing fields
-        existing = self.state_manager.get_service(sid) if sid else None
+    def _parse_observation(
+        self,
+        data: Dict[str, Any]
+    ) -> ServiceObservation:
 
-        ts = datetime.now(timezone.utc)
+        service_id = (
+            data.get("service_id")
+            or data.get("service")
+            or data.get("name")
+        )
+
+        # ---------------------------------------------------------
+        # Merge missing values with registered service state
+        # ---------------------------------------------------------
+
+        existing = (
+            self.state_manager.get_service(service_id)
+            if service_id
+            else None
+        )
+
+        # ---------------------------------------------------------
+        # Observation timestamp
+        # ---------------------------------------------------------
+
+        timestamp = datetime.now(timezone.utc)
+
         if "timestamp" in data:
+
             try:
-                ts_str = data["timestamp"].replace("Z", "+00:00")
-                ts = datetime.fromisoformat(ts_str)
+
+                timestamp_value = str(
+                    data["timestamp"]
+                ).replace("Z", "+00:00")
+
+                timestamp = datetime.fromisoformat(
+                    timestamp_value
+                )
+
+                # Ensure timezone awareness
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(
+                        tzinfo=timezone.utc
+                    )
+
             except Exception:
+
+                # Keep current time if timestamp cannot be parsed
                 pass
 
+        elif "observation_timestamp" in data:
+
+            try:
+
+                timestamp_value = str(
+                    data["observation_timestamp"]
+                ).replace("Z", "+00:00")
+
+                timestamp = datetime.fromisoformat(
+                    timestamp_value
+                )
+
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(
+                        tzinfo=timezone.utc
+                    )
+
+            except Exception:
+
+                pass
+
+        # ---------------------------------------------------------
+        # Observation field mappings
+        # ---------------------------------------------------------
+
         mapping = {
+
+            # CPU
             "CPU": "cpu_utilization_percent",
             "cpu": "cpu_utilization_percent",
+            "cpu_percent": "cpu_utilization_percent",
+
+            # Memory
             "memory": "memory_utilization_percent",
+            "memory_percent": "memory_utilization_percent",
+
+            # Traffic
             "requests per minute": "traffic_rpm",
             "RPM": "traffic_rpm",
+            "traffic_rpm": "traffic_rpm",
+
+            # Previous traffic
             "previous RPM": "previous_traffic_rpm",
+            "previous_traffic_rpm": "previous_traffic_rpm",
+
+            # Latency
             "latency": "latency_ms",
+            "latency_ms": "latency_ms",
+
+            # Cost
             "cost per hour": "cost_per_hour",
+            "cost_per_hour": "cost_per_hour",
         }
 
         parsed = {}
 
-        for k, v in data.items():
-            if k in mapping:
-                parsed[mapping[k]] = self._clean_numeric(v)
+        # ---------------------------------------------------------
+        # Parse all fields
+        # ---------------------------------------------------------
+
+        for key, value in data.items():
+
+            if key in mapping:
+
+                parsed[mapping[key]] = (
+                    self._clean_numeric(value)
+                )
+
             else:
-                parsed[k] = v
+
+                parsed[key] = value
+
+        # ---------------------------------------------------------
+        # Build ServiceObservation
+        # ---------------------------------------------------------
 
         return ServiceObservation(
-            service_id=sid or "unknown",
+
+            service_id=(
+                service_id
+                or "unknown"
+            ),
+
             cpu_utilization_percent=parsed.get(
                 "cpu_utilization_percent",
-                existing.cpu_utilization_percent if existing else 0.0
+                (
+                    existing.cpu_utilization_percent
+                    if existing
+                    else 0.0
+                )
             ),
+
             memory_utilization_percent=parsed.get(
                 "memory_utilization_percent",
-                existing.memory_utilization_percent if existing else 0.0
+                (
+                    existing.memory_utilization_percent
+                    if existing
+                    else 0.0
+                )
             ),
+
             traffic_rpm=parsed.get(
                 "traffic_rpm",
-                existing.traffic_rpm if existing else 0
+                (
+                    existing.traffic_rpm
+                    if existing
+                    else 0
+                )
             ),
+
             previous_traffic_rpm=parsed.get(
-    "previous_traffic_rpm",
-    0
-),
-            
+                "previous_traffic_rpm",
+                0
+            ),
+
             latency_ms=parsed.get(
                 "latency_ms",
-                existing.latency_ms if existing else 0.0
+                (
+                    existing.latency_ms
+                    if existing
+                    else 0.0
+                )
             ),
+
             cost_per_hour=parsed.get(
                 "cost_per_hour",
-                existing.cost_per_hour if existing else 0.0
+                (
+                    existing.cost_per_hour
+                    if existing
+                    else 0.0
+                )
             ),
-            observation_timestamp=ts,
+
+            observation_timestamp=timestamp,
+
             state_version=parsed.get(
                 "state_version",
-                existing.state_version if existing else "v1"
+                (
+                    existing.state_version
+                    if existing
+                    else "v1"
+                )
             ),
-            current_instances=existing.current_instances if existing else 1,
-            min_instances=existing.min_instances if existing else 1,
-            healthy=existing.healthy if existing else True,
-            is_critical=existing.is_critical if existing else False
+
+            current_instances=parsed.get(
+                "current_instances",
+                (
+                    existing.current_instances
+                    if existing
+                    else 1
+                )
+            ),
+
+            min_instances=parsed.get(
+                "min_instances",
+                (
+                    existing.min_instances
+                    if existing
+                    else 1
+                )
+            ),
+
+            healthy=parsed.get(
+                "healthy",
+                (
+                    existing.healthy
+                    if existing
+                    else True
+                )
+            ),
+
+            is_critical=parsed.get(
+                "is_critical",
+                (
+                    existing.is_critical
+                    if existing
+                    else False
+                )
+            )
         )
 
-    def _clean_numeric(self, val: Any) -> float:
-        if isinstance(val, (int, float)):
-            return float(val)
+    # =============================================================
+    # NUMERIC CLEANING
+    # =============================================================
 
-        if isinstance(val, str):
-            # Extract digits/floats
-            # e.g. "$18.50" -> 18.50, "22%" -> 22.0, "180ms" -> 180.0
+    def _clean_numeric(
+        self,
+        value: Any
+    ) -> float:
+
+        if isinstance(value, (int, float)):
+
+            return float(value)
+
+        if isinstance(value, str):
+
             import re
 
-            match = re.search(r"[-+]?\d*\.\d+|\d+", val)
+            match = re.search(
+                r"[-+]?\d*\.\d+|\d+",
+                value
+            )
 
             if match:
-                return float(match.group())
+
+                return float(
+                    match.group()
+                )
 
         return 0.0

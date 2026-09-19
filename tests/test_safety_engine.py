@@ -115,3 +115,29 @@ def test_matching_no_action_approved():
     res = engine.check(prop, obs)
     assert res.is_approved is True
     assert res.evaluated_against_version == obs.state_version
+def test_future_timestamp_rejected():
+    engine = SafetyEngine()
+
+    future_timestamp = datetime.now(timezone.utc) + timedelta(seconds=300)
+
+    obs = ServiceObservation(
+        service_id="test-service",
+        cpu_utilization_percent=91.0,
+        memory_utilization_percent=82.0,
+        traffic_rpm=6400,
+        latency_ms=410.0,
+        cost_per_hour=20.0,
+        observation_timestamp=future_timestamp,
+        state_version="v1",
+    )
+
+    prop = create_proposal(InfrastructureAction.SCALE_UP)
+
+    res = engine.check(prop, obs)
+
+    assert res.is_approved is False
+    assert any(
+        "Future timestamp safety" in reason
+        for reason in res.rejection_reasons
+    )
+
