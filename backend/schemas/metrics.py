@@ -7,6 +7,7 @@ class ServiceObservation(BaseModel):
     cpu_utilization_percent: float = Field(..., ge=0.0, le=100.0, description="CPU utilization percentage.")
     memory_utilization_percent: float = Field(..., ge=0.0, le=100.0, description="Memory utilization percentage.")
     traffic_rpm: int = Field(..., ge=0, description="Traffic in requests per minute.")
+    previous_traffic_rpm: int = Field(default=0, ge=0, description="Previous observed traffic in requests per minute.")
     latency_ms: float = Field(..., ge=0.0, description="Average or p99 latency in milliseconds.")
     cost_per_hour: float = Field(..., ge=0.0, description="Current estimated cost per hour.")
     observation_timestamp: datetime = Field(..., description="UTC timestamp when the observation was recorded.")

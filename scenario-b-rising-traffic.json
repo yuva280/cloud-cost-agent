@@ -1,0 +1,17 @@
+﻿{
+  "services": [
+    {
+      "service_id": "orders-api",
+      "CPU": 28,
+      "memory": 48,
+      "RPM": 4200,
+      "latency": 260,
+      "instances": 4,
+      "cost per hour": 18.5,
+      "min instances": 2,
+      "max instances": 8,
+      "max latency": 300,
+      "timestamp": "2026-09-19T02:50:00Z"
+    }
+  ]
+}
